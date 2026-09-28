@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>RSVP速読リーダー</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="RSVP読書">
+<meta name="theme-color" content="#1e1a14">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+:root{
+  --bg:#f7f3ea; --fg:#2a2320; --accent:#8a6d3b; --guide:#b8a888;
+  --control-bg:rgba(255,255,255,0.9); --border:#d8cdb8; --btn-bg:#efe8d8;
+  --font-size:52px;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#1e1a14; --fg:#eee6d8; --accent:#d8c08a; --guide:#7a6f5c;
+    --control-bg:rgba(24,20,15,0.92); --border:#4a4032; --btn-bg:#2c261d; }
+}
+:root[data-theme="light"]{ --bg:#f7f3ea; --fg:#2a2320; --accent:#8a6d3b; --guide:#b8a888;
+  --control-bg:rgba(255,255,255,0.9); --border:#d8cdb8; --btn-bg:#efe8d8; }
+:root[data-theme="dark"]{ --bg:#1e1a14; --fg:#eee6d8; --accent:#d8c08a; --guide:#7a6f5c;
+  --control-bg:rgba(24,20,15,0.92); --border:#4a4032; --btn-bg:#2c261d; }
+
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
+  font-family:"Hiragino Mincho ProN","YuMincho","Yu Mincho",serif;
+  -webkit-tap-highlight-color:transparent; touch-action:manipulation; overscroll-behavior:none;}
+#app{position:fixed;inset:0;height:100dvh;width:100%;display:flex;flex-direction:column;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);}
+.screen{flex:1;display:flex;flex-direction:column;min-height:0;}
+.hidden{display:none !important;}
+
+/* ---- setup screen ---- */
+#setupScreen{overflow-y:auto; padding:20px 16px 32px; gap:14px;}
+#setupScreen h1{font-size:1.3rem;margin:4px 0 8px;text-align:center;}
+#textInput{width:100%;min-height:140px;font-size:16px;font-family:inherit;padding:10px;
+  border:1px solid var(--border);border-radius:8px;background:var(--btn-bg);color:var(--fg);resize:vertical;}
+#dropZone{border:2px dashed var(--border);border-radius:10px;padding:10px;transition:border-color .15s;}
+#dropZone.dragover{border-color:var(--accent);}
+.fileRow{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center;}
+.fileBtn,.btn,button{font-family:inherit;font-size:14px;padding:9px 14px;border-radius:8px;
+  border:1px solid var(--border);background:var(--btn-bg);color:var(--fg);cursor:pointer;}
+.fileBtn input{display:none;}
+#dropHint{font-size:12px;opacity:.6;margin-top:6px;text-align:center;}
+#progressLoad{display:flex;flex-direction:column;gap:6px;}
+.barOuter{height:8px;border-radius:4px;background:var(--btn-bg);overflow:hidden;border:1px solid var(--border);}
+.barInner{height:100%;width:0%;background:var(--accent);transition:width .1s linear;}
+#loadStatus{font-size:12px;text-align:center;opacity:.75;}
+
+.settingsGrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;font-size:13px;}
+.settingsGrid .full{grid-column:1 / -1;}
+.settingsGrid label{display:flex;flex-direction:column;gap:4px;}
+.settingsGrid input[type=range]{width:100%;}
+.settingsGrid .row{display:flex;justify-content:space-between;align-items:center;}
+.themeBtns,.vertBtns{display:flex;gap:6px;}
+.themeBtns button,.vertBtns button{flex:1;padding:6px;font-size:12px;}
+.themeBtns button.active,.vertBtns button.active{background:var(--accent);color:var(--bg);border-color:var(--accent);}
+#startBtn{font-size:16px;padding:14px;background:var(--accent);color:var(--bg);border:none;margin-top:4px;}
+
+/* ---- reader screen ---- */
+#readerScreen{position:relative;}
+#display{flex:1;position:relative;overflow:hidden;user-select:none;-webkit-user-select:none;cursor:pointer;}
+#chunkText{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  font-size:var(--font-size);line-height:1.3;white-space:nowrap;text-align:center;
+  padding:0 12px;max-width:96vw;}
+#display.vertical #chunkText{writing-mode:vertical-rl;text-orientation:mixed;white-space:normal;
+  max-height:80vh;max-width:none;}
+.guide{position:absolute;background:var(--guide);border-radius:2px;pointer-events:none;}
+#display:not(.vertical) .guideTop{top:calc(50% - 78px);left:50%;width:2px;height:20px;transform:translateX(-50%);}
+#display:not(.vertical) .guideBottom{top:calc(50% + 58px);left:50%;width:2px;height:20px;transform:translateX(-50%);}
+#display.vertical .guideTop{left:calc(50% + 78px);top:50%;width:20px;height:2px;transform:translateY(-50%);}
+#display.vertical .guideBottom{left:calc(50% - 78px);top:50%;width:20px;height:2px;transform:translateY(-50%);}
+
+#controlBar{background:var(--control-bg);border-top:1px solid var(--border);padding:8px 10px;
+  display:flex;flex-direction:column;gap:8px;transition:opacity .15s, transform .15s;}
+#app.is-playing #controlBar{opacity:0;pointer-events:none;transform:translateY(100%);}
+.progressRow{display:flex;align-items:center;gap:8px;}
+#progressRange{flex:1;}
+.statsRow{display:flex;justify-content:space-between;font-size:11px;opacity:.75;}
+.buttonsRow{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;}
+.buttonsRow button{padding:8px 10px;font-size:13px;min-width:44px;}
+#playBtn{font-size:16px;min-width:56px;background:var(--accent);color:var(--bg);border:none;}
+#speedLabel{font-size:12px;min-width:74px;text-align:center;display:flex;align-items:center;justify-content:center;}
+
+#toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom) + 14px);transform:translateX(-50%);
+  background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:8px;font-size:13px;
+  max-width:88vw;text-align:center;opacity:0;pointer-events:none;transition:opacity .25s;z-index:50;}
+#toast.show{opacity:.95;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="setupScreen" class="screen">
+    <h1>RSVP速読リーダー</h1>
+
+    <div id="dropZone">
+      <textarea id="textInput" placeholder="ここに日本語テキストを貼り付け"></textarea>
+      <div class="fileRow">
+        <label class="fileBtn">ファイル選択<input type="file" id="fileInput" accept=".txt,.pdf"></label>
+        <button id="sampleBtn" type="button">サンプル文</button>
+      </div>
+      <div id="dropHint">PCではここにファイルをドラッグ&amp;ドロップも可</div>
+    </div>
+
+    <div id="progressLoad" class="hidden">
+      <div class="barOuter"><div id="loadBar" class="barInner"></div></div>
+      <div id="loadStatus">解析中… 0%</div>
+    </div>
+
+    <div class="settingsGrid">
+      <label>最小文字数 <span id="minCharsVal">3</span>字
+        <input type="range" id="minChars" min="1" max="8" step="1" value="3">
+      </label>
+      <label>最大文字数目安 <span id="maxCharsVal">12</span>字
+        <input type="range" id="maxChars" min="6" max="24" step="1" value="12">
+      </label>
+      <label>速度 <span id="speedVal">800</span>字/分
+        <input type="range" id="speedRange" min="300" max="2000" step="10" value="800">
+      </label>
+      <label>文字サイズ <span id="fontSizeVal">52</span>px
+        <input type="range" id="fontSizeRange" min="28" max="96" step="2" value="52">
+      </label>
+      <label class="row full">句読点で間をとる
+        <input type="checkbox" id="pauseToggle" checked>
+      </label>
+      <div class="full row">
+        <span>テーマ</span>
+        <div class="themeBtns" id="themeBtns">
+          <button type="button" data-theme="system">端末</button>
+          <button type="button" data-theme="light">ライト</button>
+          <button type="button" data-theme="dark">ダーク</button>
+        </div>
+      </div>
+      <div class="full row">
+        <span>表示方向</span>
+        <div class="vertBtns" id="vertBtns">
+          <button type="button" data-vert="0">横書き</button>
+          <button type="button" data-vert="1">縦書き</button>
+        </div>
+      </div>
+    </div>
+
+    <button id="startBtn" type="button">読み込み開始</button>
+  </div>
+
+  <div id="readerScreen" class="screen hidden">
+    <div id="display">
+      <div class="guide guideTop"></div>
+      <div id="chunkText"></div>
+      <div class="guide guideBottom"></div>
+    </div>
+    <div id="controlBar">
+      <div class="progressRow">
+        <input type="range" id="progressRange" min="0" max="0" value="0">
+      </div>
+      <div class="statsRow">
+        <span><span id="curChars">0</span> / <span id="totalCharsLabel">0</span> 字</span>
+        <span>残り <span id="remainTime">0:00</span></span>
+      </div>
+      <div class="buttonsRow">
+        <button id="backBtn" type="button" title="設定に戻る">≡</button>
+        <button id="sentBackBtn" type="button" title="1文戻る">⏮</button>
+        <button id="prevBtn" type="button" title="1チャンク戻る">◀</button>
+        <button id="playBtn" type="button" title="再生/停止">▶</button>
+        <button id="nextBtn" type="button" title="1チャンク進む">▶</button>
+        <button id="speedDownBtn" type="button" title="速度を下げる">-</button>
+        <span id="speedLabel">800字/分</span>
+        <button id="speedUpBtn" type="button" title="速度を上げる">+</button>
+        <button id="fontDownBtn" type="button" title="文字を小さく">A-</button>
+        <button id="fontUpBtn" type="button" title="文字を大きく">A+</button>
+        <button id="vertToggleBtn" type="button" title="縦横切替">縦/横</button>
+        <button id="themeToggleBtn" type="button" title="テーマ切替">☀/☾</button>
+        <button id="restartBtn" type="button" title="最初から">⟳</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+<div id="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ---------- pdf.js worker ---------- */
+if(typeof pdfjsLib !== "undefined"){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js";
+}
+
+/* ---------- BudouX (ESM via dynamic import) ---------- */
+let budouxParser = null;
+const budouxReady = (async ()=>{
+  try{
+    const mod = await import("https://cdn.jsdelivr.net/npm/budoux@0.6.4/+esm");
+    budouxParser = mod.loadDefaultJapaneseParser();
+  }catch(e){
+    budouxParser = null;
+  }
+})();
+
+/* ---------- DOM refs ---------- */
+const $ = (id)=>document.getElementById(id);
+const appEl=$("app"), setupScreen=$("setupScreen"), readerScreen=$("readerScreen");
+const textInput=$("textInput"), fileInput=$("fileInput"), dropZone=$("dropZone"), sampleBtn=$("sampleBtn");
+const progressLoad=$("progressLoad"), loadBar=$("loadBar"), loadStatus=$("loadStatus");
+const minCharsR=$("minChars"), maxCharsR=$("maxChars"), speedRangeR=$("speedRange"), fontSizeR=$("fontSizeRange");
+const minCharsVal=$("minCharsVal"), maxCharsVal=$("maxCharsVal"), speedVal=$("speedVal"), fontSizeVal=$("fontSizeVal");
+const pauseToggle=$("pauseToggle"), themeBtns=$("themeBtns"), vertBtns=$("vertBtns");
+const startBtn=$("startBtn");
+const display=$("display"), chunkTextEl=$("chunkText");
+const progressRange=$("progressRange"), curCharsEl=$("curChars"), totalCharsLabel=$("totalCharsLabel"), remainTimeEl=$("remainTime");
+const backBtn=$("backBtn"), sentBackBtn=$("sentBackBtn"), prevBtn=$("prevBtn"), playBtn=$("playBtn"), nextBtn=$("nextBtn");
+const speedDownBtn=$("speedDownBtn"), speedUpBtn=$("speedUpBtn"), speedLabel=$("speedLabel");
+const fontDownBtn=$("fontDownBtn"), fontUpBtn=$("fontUpBtn"), vertToggleBtn=$("vertToggleBtn"), themeToggleBtn=$("themeToggleBtn");
+const restartBtn=$("restartBtn");
+const toastEl=$("toast");
+
+/* ---------- sample text (自作・約300字) ---------- */
+const SAMPLE_TEXT = "速読とは、文字を一つ一つ目で追うのではなく、意味のまとまりごとに素早く捉えていく読み方のことです。人間の目は本来、細かく止まったり動いたりを繰り返しながら文章を読んでいます。この動きを減らし、視線をなるべく一点にとどめたまま情報を受け取れば、読む速度は自然と上がっていきます。RSVPという方式では、画面の中央に文節をひとつずつ表示することで、視線を動かす手間そのものをなくします。慣れないうちは戸惑うかもしれませんが、速度を落として少しずつ試してみると、やがて滑らかに読み進められるようになるはずです。焦らず、自分に合った速さを見つけてください。";
+
+/* ---------- settings ---------- */
+const DEFAULT_SETTINGS = {minChars:3, maxChars:12, speed:800, pauseEnabled:true, fontSize:52, theme:"system", vertical:false};
+let settings = loadSettings();
+
+function loadSettings(){
+  try{
+    const raw = localStorage.getItem("rsvp_settings");
+    if(raw){ return Object.assign({}, DEFAULT_SETTINGS, JSON.parse(raw)); }
+  }catch(e){}
+  return Object.assign({}, DEFAULT_SETTINGS);
+}
+function saveSettings(){
+  try{ localStorage.setItem("rsvp_settings", JSON.stringify(settings)); }catch(e){}
+}
+
+function applySettingsToUI(){
+  minCharsR.value = settings.minChars; minCharsVal.textContent = settings.minChars;
+  maxCharsR.value = settings.maxChars; maxCharsVal.textContent = settings.maxChars;
+  speedRangeR.value = settings.speed; speedVal.textContent = settings.speed;
+  fontSizeR.value = settings.fontSize; fontSizeVal.textContent = settings.fontSize;
+  pauseToggle.checked = settings.pauseEnabled;
+  [...themeBtns.children].forEach(b=>b.classList.toggle("active", b.dataset.theme===settings.theme));
+  [...vertBtns.children].forEach(b=>b.classList.toggle("active", (b.dataset.vert==="1")===settings.vertical));
+  document.documentElement.style.setProperty("--font-size", settings.fontSize+"px");
+  document.documentElement.setAttribute("data-theme", settings.theme==="system" ? "" : settings.theme);
+  display.classList.toggle("vertical", settings.vertical);
+  speedLabel.textContent = settings.speed+"字/分";
+}
+applySettingsToUI();
+
+minCharsR.addEventListener("input",()=>{ settings.minChars=+minCharsR.value; minCharsVal.textContent=settings.minChars; saveSettings(); });
+maxCharsR.addEventListener("input",()=>{ settings.maxChars=+maxCharsR.value; maxCharsVal.textContent=settings.maxChars; saveSettings(); });
+speedRangeR.addEventListener("input",()=>{ setSpeed(+speedRangeR.value); });
+fontSizeR.addEventListener("input",()=>{ setFontSize(+fontSizeR.value); });
+pauseToggle.addEventListener("change",()=>{ settings.pauseEnabled=pauseToggle.checked; saveSettings(); });
+themeBtns.addEventListener("click",(e)=>{ const b=e.target.closest("button"); if(!b)return; settings.theme=b.dataset.theme; applySettingsToUI(); saveSettings(); });
+vertBtns.addEventListener("click",(e)=>{ const b=e.target.closest("button"); if(!b)return; settings.vertical = b.dataset.vert==="1"; applySettingsToUI(); saveSettings(); });
+
+function setSpeed(v){
+  settings.speed = Math.max(300, Math.min(2000, Math.round(v/10)*10));
+  speedRangeR.value = settings.speed; speedVal.textContent = settings.speed; speedLabel.textContent = settings.speed+"字/分";
+  saveSettings();
+}
+function setFontSize(v){
+  settings.fontSize = Math.max(20, Math.min(120, v));
+  fontSizeR.value = settings.fontSize; fontSizeVal.textContent = settings.fontSize;
+  document.documentElement.style.setProperty("--font-size", settings.fontSize+"px");
+  saveSettings();
+}
+
+/* ---------- toast ---------- */
+let toastTimer=null;
+function showToast(msg, ms){
+  toastEl.textContent = msg;
+  toastEl.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>toastEl.classList.remove("show"), ms||3200);
+}
+
+/* ---------- text cleanup ---------- */
+function stripAozora(text){
+  return text
+    .replace(/[|｜]/g,"")
+    .replace(/《[^》]*》/g,"")
+    .replace(/[\[［]\s*[＃#][^\]］]*[\]］]/g,"");
+}
+function reflowPdfParagraphs(text){
+  return text.split(/\n\s*\n+/)
+    .map(p=>p.split("\n").map(l=>l.trim()).filter(Boolean).join(""))
+    .join("\n");
+}
+function splitSentences(paragraph){
+  const m = paragraph.match(/[^。！？]*[。！？]+|[^。！？]+$/g);
+  return m ? m.filter(s=>s.length>0) : [];
+}
+function getPhrases(sentence){
+  return budouxParser ? budouxParser.parse(sentence) : Array.from(sentence);
+}
+function adjustPhrases(phrases, minChars, maxChars){
+  const merged=[]; let buf="";
+  for(const p of phrases){
+    buf += p;
+    if(buf.length >= minChars){ merged.push(buf); buf=""; }
+  }
+  if(buf){ if(merged.length>0) merged[merged.length-1]+=buf; else merged.push(buf); }
+  const result=[];
+  for(const m of merged){
+    if(m.length<=maxChars){ result.push(m); continue; }
+    let s=m;
+    while(s.length>maxChars){ result.push(s.slice(0,maxChars)); s=s.slice(maxChars); }
+    if(s.length>0) result.push(s);
+  }
+  return result;
+}
+
+/* ---------- hashing ---------- */
+function hashText(str){
+  let h=0x811c9dc5;
+  for(let i=0;i<str.length;i++){ h ^= str.charCodeAt(i); h = Math.imul(h,0x01000193); }
+  return (h>>>0).toString(16);
+}
+
+/* ---------- chunk build (async, chunked processing) ---------- */
+let chunks=[]; let totalChars=0; let currentHash=null;
+const sleep=(ms)=>new Promise(r=>setTimeout(r, ms||0));
+
+async function buildChunks(rawText, isPdf){
+  progressLoad.classList.remove("hidden");
+  loadBar.style.width="0%"; loadStatus.textContent="解析中… 0%";
+  await budouxReady;
+  if(!budouxParser){ showToast("BudouXの読み込みに失敗したため簡易分割を使用します"); }
+  await sleep(0);
+
+  let text = isPdf ? reflowPdfParagraphs(rawText) : rawText;
+  text = stripAozora(text);
+  const paragraphs = text.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  const totalLenEstimate = Math.max(1, text.replace(/\s+/g,"").length);
+  let processed=0;
+  const result=[];
+  let opCounter=0;
+
+  for(let pi=0; pi<paragraphs.length; pi++){
+    const sentences = splitSentences(paragraphs[pi]);
+    for(let si=0; si<sentences.length; si++){
+      const sentence = sentences[si];
+      const phrases = getPhrases(sentence);
+      const adjusted = adjustPhrases(phrases, settings.minChars, settings.maxChars);
+      const isLastSentence = si===sentences.length-1;
+      const sentStart = result.length;
+      adjusted.forEach((t,ti)=>{
+        result.push({text:t, offset:0, paraEnd: isLastSentence && ti===adjusted.length-1, sentStart:sentStart});
+      });
+      processed += sentence.length;
+      opCounter++;
+      if(opCounter % 25 === 0){
+        const pct = Math.min(99, Math.round(processed/totalLenEstimate*100));
+        loadBar.style.width = pct+"%"; loadStatus.textContent = "解析中… "+pct+"%";
+        await sleep(0);
+      }
+    }
+  }
+  let running=0;
+  result.forEach(c=>{ c.offset=running; running+=c.text.length; });
+  loadBar.style.width="100%"; loadStatus.textContent="完了";
+  await sleep(80);
+  progressLoad.classList.add("hidden");
+  return {chunks:result, total:running};
+}
+
+/* ---------- PDF extraction ---------- */
+async function extractPdfText(arrayBuffer){
+  const pdf = await pdfjsLib.getDocument({data:arrayBuffer}).promise;
+  let full=""; let hasText=false;
+  for(let p=1;p<=pdf.numPages;p++){
+    const page = await pdf.getPage(p);
+    const content = await page.getTextContent();
+    if(content.items.length>0) hasText=true;
+    full += content.items.map(it=>it.str).join("") + "\n\n";
+    const pct = Math.round(p/pdf.numPages*30);
+    loadBar.style.width=pct+"%"; loadStatus.textContent="PDF読み取り中… "+pct+"%";
+    await sleep(0);
+  }
+  if(!hasText || full.trim().length===0){ throw new Error("NO_TEXT_LAYER"); }
+  return full;
+}
+
+/* ---------- file / input handling ---------- */
+let lastSource = "text";
+let programmaticFill = false;
+
+textInput.addEventListener("input", ()=>{ if(!programmaticFill){ lastSource="text"; } programmaticFill=false; });
+
+sampleBtn.addEventListener("click", ()=>{
+  programmaticFill=true; textInput.value = SAMPLE_TEXT; lastSource="text";
+});
+
+function decodeBytes(buffer){
+  try{
+    return new TextDecoder("utf-8",{fatal:true}).decode(buffer);
+  }catch(e){
+    try{ return new TextDecoder("shift-jis").decode(buffer); }
+    catch(e2){ return new TextDecoder("utf-8").decode(buffer); }
+  }
+}
+
+async function handleFile(file){
+  if(!file) return;
+  const name = file.name.toLowerCase();
+  if(name.endsWith(".pdf")){
+    progressLoad.classList.remove("hidden");
+    loadBar.style.width="0%"; loadStatus.textContent="PDF読み取り中… 0%";
+    try{
+      const buf = await file.arrayBuffer();
+      const text = await extractPdfText(buf);
+      programmaticFill=true; textInput.value = text; lastSource="pdf";
+      showToast("PDFからテキストを抽出しました");
+    }catch(err){
+      if(err && err.message==="NO_TEXT_LAYER"){ showToast("スキャンPDFは非対応です"); }
+      else{ showToast("PDFの読み取りに失敗しました"); }
+    }finally{
+      progressLoad.classList.add("hidden");
+    }
+  } else if(name.endsWith(".txt")){
+    const buf = await file.arrayBuffer();
+    const text = decodeBytes(buf);
+    programmaticFill=true; textInput.value = text; lastSource="text";
+  } else {
+    showToast(".txt か .pdf を選択してください");
+  }
+}
+
+fileInput.addEventListener("change", (e)=>{ handleFile(e.target.files[0]); e.target.value=""; });
+["dragenter","dragover"].forEach(ev=>dropZone.addEventListener(ev,(e)=>{ e.preventDefault(); dropZone.classList.add("dragover"); }));
+["dragleave","drop"].forEach(ev=>dropZone.addEventListener(ev,(e)=>{ e.preventDefault(); dropZone.classList.remove("dragover"); }));
+dropZone.addEventListener("drop",(e)=>{
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(f) handleFile(f);
+});
+
+/* ---------- reader state ---------- */
+let currentIndex=0; let playing=false; let timerId=null; let autosaveTimer=null; let wakeLock=null;
+
+function pauseMultiplier(text, paraEnd){
+  if(paraEnd) return 2.5;
+  const last = text.slice(-1);
+  if(last==="。"||last==="！"||last==="？") return 2.0;
+  if(last==="、") return 1.5;
+  return 1.0;
+}
+function chunkDuration(chunk){
+  const base = Math.max(120, chunk.text.length/settings.speed*60000);
+  return settings.pauseEnabled ? base*pauseMultiplier(chunk.text, chunk.paraEnd) : base;
+}
+function computeRemainingMs(fromIndexExclusive){
+  let sum=0;
+  for(let i=fromIndexExclusive+1;i<chunks.length;i++){ sum += chunkDuration(chunks[i]); }
+  return sum;
+}
+function formatTime(ms){
+  const s = Math.max(0, Math.round(ms/1000));
+  return Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+}
+
+function renderChunk(){
+  if(chunks.length===0) return;
+  const c = chunks[currentIndex];
+  chunkTextEl.textContent = c.text;
+  progressRange.max = chunks.length-1;
+  progressRange.value = currentIndex;
+  curCharsEl.textContent = c.offset + c.text.length;
+  totalCharsLabel.textContent = totalChars;
+  remainTimeEl.textContent = formatTime(computeRemainingMs(currentIndex));
+}
+
+function saveProgress(){
+  if(!currentHash) return;
+  try{
+    localStorage.setItem("rsvp_pos_"+currentHash, JSON.stringify({index:currentIndex, total:chunks.length, t:Date.now()}));
+  }catch(e){}
+}
+function loadProgress(hash, total){
+  try{
+    const raw = localStorage.getItem("rsvp_pos_"+hash);
+    if(!raw) return null;
+    const obj = JSON.parse(raw);
+    if(obj && obj.total===total && Number.isInteger(obj.index) && obj.index>=0 && obj.index<total) return obj.index;
+  }catch(e){}
+  return null;
+}
+function startAutosave(){ stopAutosave(); autosaveTimer=setInterval(saveProgress,3000); }
+function stopAutosave(){ if(autosaveTimer){ clearInterval(autosaveTimer); autosaveTimer=null; } }
+
+/* ---------- wake lock ---------- */
+async function requestWakeLock(){
+  if("wakeLock" in navigator){
+    try{ wakeLock = await navigator.wakeLock.request("screen"); }catch(e){ /* ignore */ }
+  } else if(!localStorage.getItem("rsvp_wakelock_notice_shown")){
+    showToast("この端末では自動消灯防止が使えません。自動ロックをオフにしてください。", 5000);
+    localStorage.setItem("rsvp_wakelock_notice_shown","1");
+  }
+}
+function releaseWakeLock(){ if(wakeLock){ wakeLock.release().catch(()=>{}); wakeLock=null; } }
+document.addEventListener("visibilitychange", ()=>{
+  if(playing && document.visibilityState==="visible") requestWakeLock();
+});
+
+/* ---------- playback ---------- */
+function updatePlayUI(){
+  playBtn.textContent = playing ? "⏸" : "▶";
+  appEl.classList.toggle("is-playing", playing);
+}
+function scheduleNext(){
+  clearTimeout(timerId);
+  if(!playing) return;
+  const dur = chunkDuration(chunks[currentIndex]);
+  timerId = setTimeout(()=>{
+    if(currentIndex < chunks.length-1){
+      currentIndex++; renderChunk(); scheduleNext();
+    } else {
+      pausePlayback();
+      showToast("読了しました");
+    }
+  }, dur);
+}
+async function playPlayback(){
+  if(chunks.length===0) return;
+  playing = true; updatePlayUI();
+  await requestWakeLock();
+  startAutosave();
+  scheduleNext();
+}
+function pausePlayback(){
+  playing = false; clearTimeout(timerId); updatePlayUI();
+  releaseWakeLock(); stopAutosave(); saveProgress();
+}
+function togglePlay(){ playing ? pausePlayback() : playPlayback(); }
+function stepChunk(delta){
+  if(chunks.length===0) return;
+  clearTimeout(timerId);
+  currentIndex = Math.max(0, Math.min(chunks.length-1, currentIndex+delta));
+  renderChunk();
+  if(playing) scheduleNext();
+}
+function backOneSentence(){
+  if(chunks.length===0) return;
+  clearTimeout(timerId);
+  const curStart = chunks[currentIndex].sentStart;
+  currentIndex = currentIndex>curStart ? curStart : (curStart>0 ? chunks[curStart-1].sentStart : 0);
+  renderChunk();
+  if(playing) scheduleNext();
+}
+function restartReading(){
+  clearTimeout(timerId); currentIndex=0; renderChunk(); saveProgress();
+  if(playing) scheduleNext();
+}
+
+/* ---------- reader controls ---------- */
+playBtn.addEventListener("click", togglePlay);
+prevBtn.addEventListener("click", ()=>stepChunk(-1));
+nextBtn.addEventListener("click", ()=>stepChunk(1));
+sentBackBtn.addEventListener("click", backOneSentence);
+restartBtn.addEventListener("click", restartReading);
+speedDownBtn.addEventListener("click", ()=>setSpeed(settings.speed-50));
+speedUpBtn.addEventListener("click", ()=>setSpeed(settings.speed+50));
+fontDownBtn.addEventListener("click", ()=>setFontSize(settings.fontSize-4));
+fontUpBtn.addEventListener("click", ()=>setFontSize(settings.fontSize+4));
+vertToggleBtn.addEventListener("click", ()=>{ settings.vertical=!settings.vertical; applySettingsToUI(); saveSettings(); });
+themeToggleBtn.addEventListener("click", ()=>{
+  const order=["system","light","dark"];
+  settings.theme = order[(order.indexOf(settings.theme)+1)%order.length];
+  applySettingsToUI(); saveSettings();
+});
+backBtn.addEventListener("click", ()=>{
+  pausePlayback();
+  readerScreen.classList.add("hidden"); setupScreen.classList.remove("hidden");
+});
+
+let seekWasPlaying=false;
+progressRange.addEventListener("pointerdown", ()=>{ seekWasPlaying=playing; if(playing) pausePlayback(); });
+progressRange.addEventListener("input", ()=>{ currentIndex=+progressRange.value; renderChunk(); });
+progressRange.addEventListener("pointerup", ()=>{ saveProgress(); if(seekWasPlaying) playPlayback(); });
+
+display.addEventListener("click", (e)=>{
+  const rect = display.getBoundingClientRect();
+  const relX = (e.clientX-rect.left)/rect.width;
+  if(relX < 1/3) stepChunk(-1);
+  else if(relX > 2/3) stepChunk(1);
+  else togglePlay();
+});
+
+document.addEventListener("keydown", (e)=>{
+  if(readerScreen.classList.contains("hidden")) return;
+  if(e.code==="Space"){ e.preventDefault(); togglePlay(); }
+  else if(e.code==="ArrowLeft"){ e.preventDefault(); stepChunk(-1); }
+  else if(e.code==="ArrowRight"){ e.preventDefault(); stepChunk(1); }
+  else if(e.code==="ArrowUp"){ e.preventDefault(); setSpeed(settings.speed+50); }
+  else if(e.code==="ArrowDown"){ e.preventDefault(); setSpeed(settings.speed-50); }
+});
+document.addEventListener("dblclick", (e)=>e.preventDefault());
+document.addEventListener("gesturestart", (e)=>e.preventDefault());
+
+window.addEventListener("beforeunload", ()=>{ if(playing) saveProgress(); });
+document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden" && playing) saveProgress(); });
+
+/* ---------- start ---------- */
+startBtn.addEventListener("click", async ()=>{
+  const raw = textInput.value;
+  if(!raw || !raw.trim()){ showToast("テキストを入力するか、ファイルを選択してください"); return; }
+  const isPdf = lastSource==="pdf";
+  const {chunks:built, total} = await buildChunks(raw, isPdf);
+  if(built.length===0){ showToast("読み取れる文章がありませんでした"); return; }
+  chunks = built; totalChars = total;
+  currentHash = hashText(raw);
+  const restored = loadProgress(currentHash, chunks.length);
+  currentIndex = restored!==null ? restored : 0;
+  setupScreen.classList.add("hidden");
+  readerScreen.classList.remove("hidden");
+  renderChunk();
+  playing=false; updatePlayUI();
+});
+
+})();
+</script>
+</body>
+</html>
