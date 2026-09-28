@@ -193,6 +193,7 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
         <button id="vertToggleBtn" type="button" title="縦横切替">縦/横</button>
         <button id="themeToggleBtn" type="button" title="テーマ切替">☀/☾</button>
         <button id="restartBtn" type="button" title="最初から">⟳</button>
+        <button id="shareBtn" type="button" title="このテキストを共有">共有</button>
       </div>
     </div>
   </div>
@@ -236,6 +237,7 @@ const backBtn=$("backBtn"), sentBackBtn=$("sentBackBtn"), prevBtn=$("prevBtn"), 
 const speedDownBtn=$("speedDownBtn"), speedUpBtn=$("speedUpBtn"), speedLabel=$("speedLabel");
 const fontDownBtn=$("fontDownBtn"), fontUpBtn=$("fontUpBtn"), vertToggleBtn=$("vertToggleBtn"), themeToggleBtn=$("themeToggleBtn");
 const restartBtn=$("restartBtn");
+const shareBtn=$("shareBtn");
 const toastEl=$("toast");
 const aozoraQuery=$("aozoraQuery"), aozoraStatus=$("aozoraStatus"), aozoraResults=$("aozoraResults");
 
@@ -675,11 +677,14 @@ window.addEventListener("beforeunload", ()=>{ if(playing) saveProgress(); });
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden" && playing) saveProgress(); });
 
 /* ---------- start ---------- */
+let currentRawText = "";
+
 async function startReading(raw, isPdf){
   if(!raw || !raw.trim()){ showToast("テキストを入力するか、ファイルを選択してください"); return; }
   const {chunks:built, total} = await buildChunks(raw, isPdf);
   if(built.length===0){ showToast("読み取れる文章がありませんでした"); return; }
   chunks = built; totalChars = total;
+  currentRawText = raw;
   currentHash = hashText(raw);
   const restored = loadProgress(currentHash, chunks.length);
   currentIndex = restored!==null ? restored : 0;
@@ -692,6 +697,87 @@ async function startReading(raw, isPdf){
 startBtn.addEventListener("click", ()=>{
   startReading(textInput.value, lastSource==="pdf");
 });
+
+/* ---------- 共有リンク（テキストをURLのハッシュに圧縮して埋め込む） ---------- */
+function bufferToBase64Url(buf){
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const CHUNK = 0x8000;
+  for(let i=0; i<bytes.length; i+=CHUNK){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+CHUNK));
+  }
+  return btoa(binary).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function base64UrlToBuffer(b64url){
+  let b64 = b64url.replace(/-/g,"+").replace(/_/g,"/");
+  while(b64.length % 4) b64 += "=";
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+async function compressToBase64Url(text){
+  const cs = new CompressionStream("gzip");
+  const writer = cs.writable.getWriter();
+  writer.write(new TextEncoder().encode(text));
+  writer.close();
+  const buf = await new Response(cs.readable).arrayBuffer();
+  return bufferToBase64Url(buf);
+}
+async function decompressFromBase64Url(b64url){
+  const ds = new DecompressionStream("gzip");
+  const writer = ds.writable.getWriter();
+  writer.write(new Uint8Array(base64UrlToBuffer(b64url)));
+  writer.close();
+  const buf = await new Response(ds.readable).arrayBuffer();
+  return new TextDecoder().decode(buf);
+}
+
+async function shareCurrentText(){
+  if(!currentRawText){ showToast("共有するテキストがありません"); return; }
+  if(!("CompressionStream" in window)){ showToast("この端末は共有リンクの作成に対応していません"); return; }
+  try{
+    const encoded = await compressToBase64Url(currentRawText);
+    const url = location.origin + location.pathname + "#t=" + encoded;
+    if(url.length > 8000){ showToast("テキストが長いため共有リンクが非常に長くなります"); }
+    if(navigator.share){
+      await navigator.share({ title: "RSVP速読リーダー", url });
+    } else if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(url);
+      showToast("共有リンクをコピーしました");
+    } else {
+      showToast("この端末では共有リンクを自動コピーできません");
+    }
+  }catch(err){
+    if(err && err.name==="AbortError") return;
+    showToast("共有リンクの作成に失敗しました");
+  }
+}
+shareBtn.addEventListener("click", shareCurrentText);
+
+/** 共有リンク（URLの #t=... ）からテキストを読み込んで自動的に再生画面へ */
+async function tryStartFromSharedLink(){
+  const m = location.hash.match(/[#&]t=([^&]+)/);
+  if(!m) return false;
+  if(!("DecompressionStream" in window)){
+    showToast("共有リンクの読み込みに対応していない端末です。テキストを直接貼り付けてください。");
+    history.replaceState(null, "", location.pathname);
+    return false;
+  }
+  try{
+    const text = await decompressFromBase64Url(m[1]);
+    if(!text || !text.trim()) throw new Error("empty");
+    history.replaceState(null, "", location.pathname);
+    programmaticFill = true; textInput.value = text; lastSource = "text";
+    await startReading(text, false);
+    return true;
+  }catch(err){
+    history.replaceState(null, "", location.pathname);
+    showToast("共有リンクの読み込みに失敗しました。テキストを直接貼り付けてください。");
+    return false;
+  }
+}
+tryStartFromSharedLink();
 
 /* ---------- 青空文庫 検索・取得 ---------- */
 let aozoraIndex = null;
