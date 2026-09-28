@@ -46,6 +46,16 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
   border:1px solid var(--border);background:var(--btn-bg);color:var(--fg);cursor:pointer;}
 .fileBtn input{display:none;}
 #dropHint{font-size:12px;opacity:.6;margin-top:6px;text-align:center;}
+#aozoraSection{border:1px solid var(--border);border-radius:10px;padding:10px;}
+#aozoraSection .row{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;}
+#aozoraQuery{width:100%;padding:9px;font-size:14px;font-family:inherit;border-radius:8px;
+  border:1px solid var(--border);background:var(--btn-bg);color:var(--fg);}
+#aozoraStatus{font-size:12px;opacity:.8;margin-top:6px;line-height:1.5;}
+#aozoraStatus a{color:var(--accent);}
+#aozoraResults{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;
+  max-height:240px;overflow-y:auto;}
+#aozoraResults li{margin:0;}
+.aozoraResultBtn{width:100%;text-align:left;padding:8px 10px;font-size:13px;}
 #progressLoad{display:flex;flex-direction:column;gap:6px;}
 .barOuter{height:8px;border-radius:4px;background:var(--btn-bg);overflow:hidden;border:1px solid var(--border);}
 .barInner{height:100%;width:0%;background:var(--accent);transition:width .1s linear;}
@@ -105,6 +115,13 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
         <button id="sampleBtn" type="button">サンプル文</button>
       </div>
       <div id="dropHint">PCではここにファイルをドラッグ&amp;ドロップも可</div>
+    </div>
+
+    <div id="aozoraSection">
+      <div class="row"><span>青空文庫から検索</span></div>
+      <input type="text" id="aozoraQuery" placeholder="作品名で検索（例: 蜘蛛の糸）" autocomplete="off">
+      <div id="aozoraStatus"></div>
+      <ul id="aozoraResults"></ul>
     </div>
 
     <div id="progressLoad" class="hidden">
@@ -220,6 +237,7 @@ const speedDownBtn=$("speedDownBtn"), speedUpBtn=$("speedUpBtn"), speedLabel=$("
 const fontDownBtn=$("fontDownBtn"), fontUpBtn=$("fontUpBtn"), vertToggleBtn=$("vertToggleBtn"), themeToggleBtn=$("themeToggleBtn");
 const restartBtn=$("restartBtn");
 const toastEl=$("toast");
+const aozoraQuery=$("aozoraQuery"), aozoraStatus=$("aozoraStatus"), aozoraResults=$("aozoraResults");
 
 /* ---------- sample text (自作・約300字) ---------- */
 const SAMPLE_TEXT = "速読とは、文字を一つ一つ目で追うのではなく、意味のまとまりごとに素早く捉えていく読み方のことです。人間の目は本来、細かく止まったり動いたりを繰り返しながら文章を読んでいます。この動きを減らし、視線をなるべく一点にとどめたまま情報を受け取れば、読む速度は自然と上がっていきます。RSVPという方式では、画面の中央に文節をひとつずつ表示することで、視線を動かす手間そのものをなくします。慣れないうちは戸惑うかもしれませんが、速度を落として少しずつ試してみると、やがて滑らかに読み進められるようになるはずです。焦らず、自分に合った速さを見つけてください。";
@@ -609,10 +627,8 @@ window.addEventListener("beforeunload", ()=>{ if(playing) saveProgress(); });
 document.addEventListener("visibilitychange", ()=>{ if(document.visibilityState==="hidden" && playing) saveProgress(); });
 
 /* ---------- start ---------- */
-startBtn.addEventListener("click", async ()=>{
-  const raw = textInput.value;
+async function startReading(raw, isPdf){
   if(!raw || !raw.trim()){ showToast("テキストを入力するか、ファイルを選択してください"); return; }
-  const isPdf = lastSource==="pdf";
   const {chunks:built, total} = await buildChunks(raw, isPdf);
   if(built.length===0){ showToast("読み取れる文章がありませんでした"); return; }
   chunks = built; totalChars = total;
@@ -623,7 +639,150 @@ startBtn.addEventListener("click", async ()=>{
   readerScreen.classList.remove("hidden");
   renderChunk();
   playing=false; updatePlayUI();
+}
+
+startBtn.addEventListener("click", ()=>{
+  startReading(textInput.value, lastSource==="pdf");
 });
+
+/* ---------- 青空文庫 検索・取得 ---------- */
+let aozoraIndex = null;
+let aozoraIndexPromise = null;
+
+function ensureAozoraIndex(){
+  if(aozoraIndexPromise) return aozoraIndexPromise;
+  aozoraIndexPromise = fetch("aozora-index.json")
+    .then((res)=>{ if(!res.ok) throw new Error("HTTP "+res.status); return res.json(); })
+    .then((json)=>{ aozoraIndex = json; return json; })
+    .catch((err)=>{ aozoraIndexPromise = null; throw err; });
+  return aozoraIndexPromise;
+}
+
+function normalizeKana(s){
+  return String(s).replace(/[ァ-ヶ]/g, (ch)=>String.fromCharCode(ch.charCodeAt(0)-0x60)).toLowerCase();
+}
+
+function setAozoraStatus(msg, linkUrl){
+  aozoraStatus.innerHTML = "";
+  if(!msg){ return; }
+  aozoraStatus.appendChild(document.createTextNode(msg));
+  if(linkUrl){
+    aozoraStatus.appendChild(document.createElement("br"));
+    const a = document.createElement("a");
+    a.href = linkUrl; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.textContent = "青空文庫の作品ページを開く";
+    aozoraStatus.appendChild(a);
+  }
+}
+
+function renderAozoraResults(indices){
+  aozoraResults.innerHTML = "";
+  if(indices.length===0){
+    const li = document.createElement("li");
+    li.style.cssText = "opacity:.6;font-size:12px;padding:4px;";
+    li.textContent = "一致する作品がありません";
+    aozoraResults.appendChild(li);
+    return;
+  }
+  indices.forEach((i)=>{
+    const rec = aozoraIndex.d[i];
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "aozoraResultBtn";
+    btn.textContent = rec[0] + "　― " + rec[2];
+    btn.addEventListener("click", ()=>fetchAozoraWork(rec));
+    li.appendChild(btn);
+    aozoraResults.appendChild(li);
+  });
+}
+
+function runAozoraSearch(){
+  const qRaw = aozoraQuery.value.trim();
+  if(!qRaw){ aozoraResults.innerHTML = ""; setAozoraStatus(""); return; }
+  if(!aozoraIndex){
+    setAozoraStatus("索引を読み込み中…");
+    ensureAozoraIndex().then(runAozoraSearch).catch(()=>setAozoraStatus("索引の読み込みに失敗しました。通信環境をご確認ください。"));
+    return;
+  }
+  setAozoraStatus("");
+  const q = normalizeKana(qRaw);
+  const matches = [];
+  for(let i=0; i<aozoraIndex.d.length; i++){
+    const rec = aozoraIndex.d[i];
+    if(rec[0].includes(qRaw) || normalizeKana(rec[1]).includes(q)){
+      matches.push(i);
+      if(matches.length>=20) break;
+    }
+  }
+  renderAozoraResults(matches);
+}
+
+let aozoraSearchTimer = null;
+aozoraQuery.addEventListener("focus", ()=>{
+  ensureAozoraIndex().catch(()=>setAozoraStatus("索引の読み込みに失敗しました。通信環境をご確認ください。"));
+});
+aozoraQuery.addEventListener("input", ()=>{
+  clearTimeout(aozoraSearchTimer);
+  aozoraSearchTimer = setTimeout(runAozoraSearch, 150);
+});
+
+function decodeShiftJIS(buffer){
+  return new TextDecoder("shift-jis").decode(buffer);
+}
+
+/** 青空文庫HTML(ruby/rp/rt/外字img構造)から本文のみを抽出する */
+function extractAozoraMainText(html){
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const root = doc.querySelector(".main_text");
+  if(!root) return "";
+  const out = [];
+  function walk(node){
+    if(node.nodeType === Node.TEXT_NODE){ out.push(node.textContent); return; }
+    if(node.nodeType !== Node.ELEMENT_NODE) return;
+    const tag = node.tagName.toLowerCase();
+    if(tag==="rt" || tag==="rp" || tag==="script" || tag==="style") return;
+    if(tag==="br"){ out.push("\n"); return; }
+    if(tag==="img"){
+      if(node.classList.contains("gaiji")){
+        const alt = node.getAttribute("alt") || "";
+        const m = alt.match(/^([^(（]+)/);
+        out.push(m ? m[1] : "");
+      }
+      return;
+    }
+    node.childNodes.forEach(walk);
+  }
+  root.childNodes.forEach(walk);
+  return out.join("");
+}
+
+function aozoraCardUrl(relpath){
+  const m = relpath.match(/^(\d{6})\/files\/(\d+)_/);
+  return m ? ("https://www.aozora.gr.jp/cards/"+m[1]+"/card"+m[2]+".html") : "https://www.aozora.gr.jp/";
+}
+
+async function fetchAozoraWork(rec){
+  const [title, , , relpath] = rec;
+  const url = aozoraIndex.base + relpath;
+  setAozoraStatus("取得中: "+title+"…");
+  try{
+    const res = await fetch(url);
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const buf = await res.arrayBuffer();
+    const html = decodeShiftJIS(buf);
+    const raw = extractAozoraMainText(html);
+    const cleaned = stripAozora(raw).trim();
+    if(!cleaned) throw new Error("本文を抽出できませんでした");
+    programmaticFill = true; textInput.value = cleaned; lastSource = "text";
+    setAozoraStatus("");
+    showToast(title+" を取得しました");
+    await startReading(cleaned, false);
+  }catch(err){
+    const reason = (err && err.message) ? err.message : "不明なエラー";
+    setAozoraStatus(title+" の取得に失敗しました（"+reason+"）。作品ページを開いて本文をコピーし、上のテキスト欄に貼り付けてください。", aozoraCardUrl(relpath));
+  }
+}
 
 })();
 </script>
