@@ -73,10 +73,10 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
 
 /* ---- reader screen ---- */
 #readerScreen{position:relative;}
-#display{flex:1;position:relative;overflow:hidden;user-select:none;-webkit-user-select:none;cursor:pointer;}
-#chunkText{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  font-size:var(--font-size);line-height:1.5;white-space:normal;text-align:center;
-  line-break:strict;word-break:normal;overflow-wrap:normal;
+#display{flex:1;position:relative;display:flex;align-items:center;justify-content:center;
+  overflow:hidden;user-select:none;-webkit-user-select:none;cursor:pointer;}
+#chunkText{font-size:var(--font-size);line-height:1.5;white-space:normal;text-align:center;
+  line-break:strict;word-break:keep-all;overflow-wrap:anywhere;
   max-width:calc(100% - 32px);}
 #display.vertical #chunkText{writing-mode:vertical-rl;text-orientation:mixed;
   max-width:none;max-height:calc(100% - 32px);}
@@ -333,27 +333,57 @@ function splitAtNakaguro(phrases){
   }
   return out;
 }
-function adjustPhrases(phrases, minChars, maxChars){
-  const merged=[]; let buf="";
-  for(const p of phrases){
-    buf += p;
-    if(buf.length >= minChars){ merged.push(buf); buf=""; }
-  }
-  if(buf){ if(merged.length>0) merged[merged.length-1]+=buf; else merged.push(buf); }
-  const result=[];
-  for(const m of merged){
-    if(m.length<=maxChars){ result.push(m); continue; }
-    let s=m;
-    while(s.length>maxChars){
-      const window = s.slice(0,maxChars);
-      const nakaguro = window.lastIndexOf("・");
-      const cut = nakaguro>0 ? nakaguro+1 : maxChars;
-      result.push(s.slice(0,cut));
-      s = s.slice(cut);
+const CLOSING_PUNCT = /[、。，．,.）)」』】〉》〕］\]!?！？…‥]/;
+const OPENING_PUNCT = /[（(「『【〈《〔［\[]/;
+/** 閉じ記号は前の文節へ、開き記号は次の文節へ寄せる（禁則の土台） */
+function normalizeBrackets(phrases){
+  const out = phrases.slice();
+  for(let i=1;i<out.length;i++){
+    while(out[i].length>0 && CLOSING_PUNCT.test(out[i][0])){
+      out[i-1] += out[i][0];
+      out[i] = out[i].slice(1);
     }
-    if(s.length>0) result.push(s);
   }
-  return result;
+  for(let i=0;i<out.length-1;i++){
+    while(out[i].length>0 && OPENING_PUNCT.test(out[i][out[i].length-1])){
+      out[i+1] = out[i][out[i].length-1] + out[i+1];
+      out[i] = out[i].slice(0,-1);
+    }
+  }
+  return out.filter((p)=>p.length>0);
+}
+/**
+ * 文節1つだけで表示幅を超える場合の例外的な折り返し用に、文節の内部にも
+ * 禁則（行頭に閉じ記号・行末に開き記号を置かない）を守ったうえでZWSPを挿む。
+ * 文節が画面に収まる通常時は、これらの区切りは折り返しに使われない。
+ */
+function insertSoftBreaks(phrase){
+  if(phrase.length<=1) return phrase;
+  let out = phrase[0];
+  for(let i=1;i<phrase.length;i++){
+    const prev = phrase[i-1];
+    const ch = phrase[i];
+    if(!CLOSING_PUNCT.test(ch) && !OPENING_PUNCT.test(prev)){ out += "​"/* ZWSP */; }
+    out += ch;
+  }
+  return out;
+}
+/**
+ * BudouXの文節境界のみでチャンクを組み立てる。文字数による機械的な分割は行わない。
+ * 文節は連結してよいが、合計が上限を超える結合はしない。単独で上限を超える文節は
+ * そのまま1チャンクにする（「・」直後の事前分割は splitAtNakaguro が担当）。
+ * チャンク内部の文節境界は U+200B (ZWSP) で示し、CSS側でその位置のみ折り返しを許可する。
+ */
+function groupPhrases(phrases, minChars, maxChars){
+  const groups=[]; let cur=[]; let curLen=0;
+  for(const p of phrases){
+    if(cur.length===0){ cur=[p]; curLen=p.length; continue; }
+    const wouldBe = curLen + p.length;
+    if(curLen < minChars && wouldBe <= maxChars){ cur.push(p); curLen=wouldBe; }
+    else { groups.push(cur); cur=[p]; curLen=p.length; }
+  }
+  if(cur.length>0) groups.push(cur);
+  return groups.map((g)=>({ text: g.map(insertSoftBreaks).join("​"/* U+200B ZERO WIDTH SPACE */), len: g.reduce((a,b)=>a+b.length,0) }));
 }
 
 /* ---------- hashing ---------- */
@@ -386,12 +416,12 @@ async function buildChunks(rawText, isPdf){
     const sentences = splitSentences(paragraphs[pi]);
     for(let si=0; si<sentences.length; si++){
       const sentence = sentences[si];
-      const phrases = splitAtNakaguro(getPhrases(sentence));
-      const adjusted = adjustPhrases(phrases, settings.minChars, settings.maxChars);
+      const phrases = normalizeBrackets(splitAtNakaguro(getPhrases(sentence)));
+      const grouped = groupPhrases(phrases, settings.minChars, settings.maxChars);
       const isLastSentence = si===sentences.length-1;
       const sentStart = result.length;
-      adjusted.forEach((t,ti)=>{
-        result.push({text:t, offset:0, paraEnd: isLastSentence && ti===adjusted.length-1, sentStart:sentStart});
+      grouped.forEach((g,ti)=>{
+        result.push({text:g.text, len:g.len, offset:0, paraEnd: isLastSentence && ti===grouped.length-1, sentStart:sentStart});
       });
       processed += sentence.length;
       opCounter++;
@@ -403,7 +433,7 @@ async function buildChunks(rawText, isPdf){
     }
   }
   let running=0;
-  result.forEach(c=>{ c.offset=running; running+=c.text.length; });
+  result.forEach(c=>{ c.offset=running; running+=c.len; });
   loadBar.style.width="100%"; loadStatus.textContent="完了";
   await sleep(80);
   progressLoad.classList.add("hidden");
@@ -485,13 +515,13 @@ let currentIndex=0; let playing=false; let timerId=null; let autosaveTimer=null;
 
 function pauseMultiplier(text, paraEnd){
   if(paraEnd) return 2.5;
-  const last = text.slice(-1);
+  const last = text.replace(/[​]/g,"").slice(-1);
   if(last==="。"||last==="！"||last==="？") return 2.0;
   if(last==="、") return 1.5;
   return 1.0;
 }
 function chunkDuration(chunk){
-  const base = Math.max(120, chunk.text.length/settings.speed*60000);
+  const base = Math.max(120, chunk.len/settings.speed*60000);
   return settings.pauseEnabled ? base*pauseMultiplier(chunk.text, chunk.paraEnd) : base;
 }
 function computeRemainingMs(fromIndexExclusive){
@@ -510,7 +540,7 @@ function renderChunk(){
   chunkTextEl.textContent = c.text;
   progressRange.max = chunks.length-1;
   progressRange.value = currentIndex;
-  curCharsEl.textContent = c.offset + c.text.length;
+  curCharsEl.textContent = c.offset + c.len;
   totalCharsLabel.textContent = totalChars;
   remainTimeEl.textContent = formatTime(computeRemainingMs(currentIndex));
 }
