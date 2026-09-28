@@ -75,10 +75,11 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
 #readerScreen{position:relative;}
 #display{flex:1;position:relative;overflow:hidden;user-select:none;-webkit-user-select:none;cursor:pointer;}
 #chunkText{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  font-size:var(--font-size);line-height:1.3;white-space:nowrap;text-align:center;
-  padding:0 12px;max-width:96vw;}
-#display.vertical #chunkText{writing-mode:vertical-rl;text-orientation:mixed;white-space:normal;
-  max-height:80vh;max-width:none;}
+  font-size:var(--font-size);line-height:1.5;white-space:normal;text-align:center;
+  line-break:strict;word-break:normal;overflow-wrap:normal;
+  max-width:calc(100% - 32px);}
+#display.vertical #chunkText{writing-mode:vertical-rl;text-orientation:mixed;
+  max-width:none;max-height:calc(100% - 32px);}
 .guide{position:absolute;background:var(--guide);border-radius:2px;pointer-events:none;}
 #display:not(.vertical) .guideTop{top:calc(50% - 78px);left:50%;width:2px;height:20px;transform:translateX(-50%);}
 #display:not(.vertical) .guideBottom{top:calc(50% + 58px);left:50%;width:2px;height:20px;transform:translateX(-50%);}
@@ -86,8 +87,7 @@ html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--fg);
 #display.vertical .guideBottom{left:calc(50% - 78px);top:50%;width:20px;height:2px;transform:translateY(-50%);}
 
 #controlBar{background:var(--control-bg);border-top:1px solid var(--border);padding:8px 10px;
-  display:flex;flex-direction:column;gap:8px;transition:opacity .15s, transform .15s;}
-#app.is-playing #controlBar{opacity:0;pointer-events:none;transform:translateY(100%);}
+  display:flex;flex-direction:column;gap:8px;}
 .progressRow{display:flex;align-items:center;gap:8px;}
 #progressRange{flex:1;}
 .statsRow{display:flex;justify-content:space-between;font-size:11px;opacity:.75;}
@@ -223,7 +223,7 @@ const budouxReady = (async ()=>{
 
 /* ---------- DOM refs ---------- */
 const $ = (id)=>document.getElementById(id);
-const appEl=$("app"), setupScreen=$("setupScreen"), readerScreen=$("readerScreen");
+const setupScreen=$("setupScreen"), readerScreen=$("readerScreen");
 const textInput=$("textInput"), fileInput=$("fileInput"), dropZone=$("dropZone"), sampleBtn=$("sampleBtn");
 const progressLoad=$("progressLoad"), loadBar=$("loadBar"), loadStatus=$("loadStatus");
 const minCharsR=$("minChars"), maxCharsR=$("maxChars"), speedRangeR=$("speedRange"), fontSizeR=$("fontSizeRange");
@@ -320,6 +320,19 @@ function splitSentences(paragraph){
 function getPhrases(sentence){
   return budouxParser ? budouxParser.parse(sentence) : Array.from(sentence);
 }
+/** 「・」（中黒）の直後も文節の区切り候補として扱う */
+function splitAtNakaguro(phrases){
+  const out=[];
+  for(const p of phrases){
+    if(p.indexOf("・")===-1){ out.push(p); continue; }
+    let start=0;
+    for(let i=0;i<p.length;i++){
+      if(p[i]==="・"){ out.push(p.slice(start,i+1)); start=i+1; }
+    }
+    if(start<p.length) out.push(p.slice(start));
+  }
+  return out;
+}
 function adjustPhrases(phrases, minChars, maxChars){
   const merged=[]; let buf="";
   for(const p of phrases){
@@ -331,7 +344,13 @@ function adjustPhrases(phrases, minChars, maxChars){
   for(const m of merged){
     if(m.length<=maxChars){ result.push(m); continue; }
     let s=m;
-    while(s.length>maxChars){ result.push(s.slice(0,maxChars)); s=s.slice(maxChars); }
+    while(s.length>maxChars){
+      const window = s.slice(0,maxChars);
+      const nakaguro = window.lastIndexOf("・");
+      const cut = nakaguro>0 ? nakaguro+1 : maxChars;
+      result.push(s.slice(0,cut));
+      s = s.slice(cut);
+    }
     if(s.length>0) result.push(s);
   }
   return result;
@@ -367,7 +386,7 @@ async function buildChunks(rawText, isPdf){
     const sentences = splitSentences(paragraphs[pi]);
     for(let si=0; si<sentences.length; si++){
       const sentence = sentences[si];
-      const phrases = getPhrases(sentence);
+      const phrases = splitAtNakaguro(getPhrases(sentence));
       const adjusted = adjustPhrases(phrases, settings.minChars, settings.maxChars);
       const isLastSentence = si===sentences.length-1;
       const sentStart = result.length;
@@ -531,7 +550,6 @@ document.addEventListener("visibilitychange", ()=>{
 /* ---------- playback ---------- */
 function updatePlayUI(){
   playBtn.textContent = playing ? "⏸" : "▶";
-  appEl.classList.toggle("is-playing", playing);
 }
 function scheduleNext(){
   clearTimeout(timerId);
